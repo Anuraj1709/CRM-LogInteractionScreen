@@ -7,3 +7,5 @@ __pycache__/
 .env.*
 *.pyc
 backend/.mypy_cache/
+build/
+coverage/
