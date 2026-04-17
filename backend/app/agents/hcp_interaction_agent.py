@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from datetime import date, datetime, timedelta
 from typing import Any, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -85,24 +87,173 @@ def summarize_interaction_notes(notes: str) -> dict[str, Any]:
 
 
 def _get_llm():
-    if not settings.groq_api_key or ChatGroq is None:
+    api_key = settings.groq_api_key.strip()
+    if (
+        not api_key
+        or api_key.startswith("replace-with")
+        or ChatGroq is None
+    ):
         return None
 
     return ChatGroq(
-        api_key=settings.groq_api_key,
+        api_key=api_key,
         model=settings.groq_model,
         temperature=0.2,
     )
+
+
+def _extract_hcp(message: str) -> dict[str, str]:
+    lower = message.lower()
+
+    for hcp in list_hcps():
+        full_name = hcp.name.lower()
+        normalized_name = full_name.replace("dr. ", "")
+        name_parts = normalized_name.split()
+
+        aliases = {
+            full_name,
+            normalized_name,
+            f"dr {normalized_name}",
+            f"dr. {normalized_name}",
+            f"dr {name_parts[0]}",
+            f"dr. {name_parts[0]}",
+            name_parts[0],
+        }
+
+        if len(name_parts) > 1:
+            aliases.add(" ".join(name_parts))
+            aliases.add(name_parts[-1])
+
+        if any(alias in lower for alias in aliases):
+            return {"hcpName": hcp.name, "hcpId": hcp.id}
+
+    free_text_match = re.search(r"\bdr\.?\s+([a-z]+(?:\s+[a-z]+)?)\b", lower)
+    if free_text_match:
+        stop_words = {
+            "and",
+            "at",
+            "for",
+            "from",
+            "in",
+            "met",
+            "of",
+            "on",
+            "regarding",
+            "regards",
+            "the",
+            "to",
+            "was",
+            "with",
+            "discussed",
+            "discussing",
+            "shared",
+        }
+        name_parts = [
+            part for part in free_text_match.group(1).split()
+            if part not in stop_words
+        ]
+        if name_parts:
+            formatted_name = " ".join(part.capitalize() for part in name_parts)
+            return {"hcpName": f"Dr. {formatted_name}", "hcpId": ""}
+
+    return {}
+
+
+def _extract_date(message: str) -> str | None:
+    lower = message.lower()
+    today = date.today()
+    current_year = today.year
+
+    relative_days = {
+        "today": 0,
+        "yesterday": -1,
+        "tomorrow": 1,
+    }
+
+    for keyword, offset in relative_days.items():
+        if re.search(rf"\b{keyword}\b", lower):
+            return (today + timedelta(days=offset)).isoformat()
+
+    months = {
+        "january": 1,
+        "february": 2,
+        "march": 3,
+        "april": 4,
+        "may": 5,
+        "june": 6,
+        "july": 7,
+        "august": 8,
+        "september": 9,
+        "october": 10,
+        "november": 11,
+        "december": 12,
+    }
+
+    month_pattern = "|".join(months.keys())
+    named_match = re.search(
+        rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+({month_pattern})(?:\s+(\d{{4}}))?\b",
+        lower,
+    )
+    if named_match:
+        day = int(named_match.group(1))
+        month = months[named_match.group(2)]
+        year = int(named_match.group(3) or current_year)
+        return f"{year:04d}-{month:02d}-{day:02d}"
+
+    slash_match = re.search(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b", lower)
+    if slash_match:
+        day = int(slash_match.group(1))
+        month = int(slash_match.group(2))
+        year_token = slash_match.group(3)
+        year = current_year
+        if year_token:
+            year = int(year_token)
+            if year < 100:
+                year += 2000
+        return f"{year:04d}-{month:02d}-{day:02d}"
+
+    return None
+
+
+def _extract_time(message: str) -> str | None:
+    lower = message.lower()
+    time_match = re.search(r"\b(\d{1,2}):(\d{2})\s*(am|pm)?\b|\b(\d{1,2})\s*(am|pm)\b", lower)
+    if not time_match:
+        return None
+
+    if time_match.group(1):
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2))
+        meridiem = time_match.group(3)
+    else:
+        hour = int(time_match.group(4))
+        minute = 0
+        meridiem = time_match.group(5)
+
+    if meridiem == "pm" and hour != 12:
+        hour += 12
+    if meridiem == "am" and hour == 12:
+        hour = 0
+
+    if hour > 23 or minute > 59:
+        return None
+
+    return f"{hour:02d}:{minute:02d}"
 
 
 def _extract_draft_updates(message: str, draft: dict[str, Any]) -> dict[str, Any]:
     lower = message.lower()
     updates: dict[str, Any] = {}
 
-    for hcp in list_hcps():
-        if hcp.name.lower().replace("dr. ", "") in lower or hcp.name.lower() in lower:
-            updates["hcpName"] = hcp.name
-            updates["hcpId"] = hcp.id
+    updates.update(_extract_hcp(message))
+
+    extracted_date = _extract_date(message)
+    if extracted_date:
+        updates["interactionDate"] = extracted_date
+
+    extracted_time = _extract_time(message)
+    if extracted_time:
+        updates["interactionTime"] = extracted_time
 
     if "positive" in lower:
         updates["sentiment"] = "Positive"
@@ -117,7 +268,7 @@ def _extract_draft_updates(message: str, draft: dict[str, Any]) -> dict[str, Any
     if "sample" in lower:
         updates["samplesDistributed"] = sorted(set(draft.get("samplesDistributed", []) + ["Starter pack"]))
 
-    updates["topicsDiscussed"] = draft.get("topicsDiscussed") or message
+    updates["topicsDiscussed"] = message
     updates["summary"] = message[:240]
 
     if "follow-up" in lower or "follow up" in lower:
@@ -164,9 +315,17 @@ def _assistant_reply(message: str, draft: dict[str, Any], tool_outputs: dict[str
             )
         ),
     ]
-    llm_response = llm.invoke(messages)
-    text = llm_response.content if isinstance(llm_response, AIMessage) else str(llm_response.content)
-    return AgentChatResponse(message=text, draftUpdates=draft_updates)
+    try:
+        llm_response = llm.invoke(messages)
+        text = llm_response.content if isinstance(llm_response, AIMessage) else str(llm_response.content)
+        return AgentChatResponse(message=text, draftUpdates=draft_updates)
+    except Exception:
+        fallback_reply = (
+            f"I captured the interaction and updated the draft fields. "
+            f"Suggested next step: {action.get('recommendation', 'Schedule a scientific follow-up.')} "
+            f"Summary: {summary.get('summary', draft_updates.get('summary', 'Interaction noted.'))}"
+        )
+        return AgentChatResponse(message=fallback_reply, draftUpdates=draft_updates)
 
 
 def _tooling_node(state: AgentState) -> AgentState:

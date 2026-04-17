@@ -2,6 +2,48 @@ import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 
+const extractHcpFromMessage = (message) => {
+  const match = message.match(/\bdr\.?\s+([a-z]+(?:\s+[a-z]+)?)\b/i);
+
+  if (!match) {
+    return null;
+  }
+
+  const stopWords = new Set([
+    "and",
+    "at",
+    "for",
+    "from",
+    "in",
+    "met",
+    "of",
+    "on",
+    "regarding",
+    "regards",
+    "the",
+    "to",
+    "was",
+    "with",
+    "discussed",
+    "discussing",
+    "shared"
+  ]);
+
+  const nameParts = match[1]
+    .split(/\s+/)
+    .filter((part) => part && !stopWords.has(part.toLowerCase()));
+
+  if (!nameParts.length) {
+    return null;
+  }
+
+  const formattedName = nameParts
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+
+  return `Dr. ${formattedName}`;
+};
+
 const initialDraft = {
   hcpId: "",
   hcpName: "",
@@ -19,6 +61,14 @@ const initialDraft = {
   channel: "In-person",
   summary: ""
 };
+
+const initialMessages = [
+  {
+    role: "assistant",
+    content:
+      "Log interaction details here, for example: Met Dr. Smith to discuss Product X efficacy, neutral sentiment, shared brochure."
+  }
+];
 
 export const fetchHcps = createAsyncThunk("interaction/fetchHcps", async () => {
   const response = await fetch(`${API_BASE}/hcps`);
@@ -69,13 +119,7 @@ const interactionSlice = createSlice({
   initialState: {
     draft: initialDraft,
     hcps: [],
-    messages: [
-      {
-        role: "assistant",
-        content:
-          "Log interaction details here, for example: Met Dr. Smith to discuss Product X efficacy, neutral sentiment, shared brochure."
-      }
-    ],
+    messages: initialMessages,
     status: "idle",
     assistantStatus: "idle",
     directoryStatus: "idle",
@@ -94,7 +138,15 @@ const interactionSlice = createSlice({
       state.draft.samplesDistributed.push(action.payload);
     },
     pushUserMessage(state, action) {
-      state.messages.push({ role: "user", content: action.payload });
+      const message = action.payload;
+      const extractedHcp = extractHcpFromMessage(message);
+
+      state.messages.push({ role: "user", content: message });
+
+      if (extractedHcp && !state.draft.hcpName) {
+        state.draft.hcpName = extractedHcp;
+        state.draft.hcpId = "";
+      }
     },
     clearError(state) {
       state.error = null;
@@ -119,10 +171,18 @@ const interactionSlice = createSlice({
       .addCase(submitInteraction.fulfilled, (state, action) => {
         state.status = "succeeded";
         state.lastSaved = action.payload;
-        state.messages.push({
-          role: "assistant",
-          content: `Interaction saved for ${action.payload.hcp_name}.`
-        });
+        state.messages = [
+          ...initialMessages,
+          {
+            role: "assistant",
+            content: `Interaction saved for ${action.payload.hcp_name}. Start the next interaction when you're ready.`
+          }
+        ];
+        state.draft = {
+          ...initialDraft,
+          interactionDate: state.draft.interactionDate,
+          interactionTime: state.draft.interactionTime
+        };
       })
       .addCase(submitInteraction.rejected, (state, action) => {
         state.status = "failed";

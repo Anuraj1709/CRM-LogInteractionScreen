@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     groq_model: str = "gemma2-9b-it"
     groq_reasoning_model: str = "llama-3.3-70b-versatile"
     database_url: str = "postgresql+psycopg://crm_user:crm_pass@localhost:5432/ai_first_crm"
+    interaction_store_path: str = "data/interactions.json"
 
 
 settings = Settings()

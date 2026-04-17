@@ -30,17 +30,19 @@ function InteractionForm({ hcps, onSubmit, saveStatus }) {
       <div className="panel-header">
         <div>
           <h2>Interaction Details</h2>
-          <p>Designed for compliant field capture with AI-assisted completion.</p>
         </div>
       </div>
 
       <div className="form-grid">
         <Field label="HCP Name">
-          <select
+          <input
+            type="text"
+            placeholder="Enter HCP name..."
             value={draft.hcpName}
             onChange={(event) => {
-              const selected = hcps.find((hcp) => hcp.name === event.target.value);
-              dispatch(updateDraftField({ field: "hcpName", value: event.target.value }));
+              const value = event.target.value;
+              const selected = hcps.find((hcp) => hcp.name.toLowerCase() === value.trim().toLowerCase());
+              dispatch(updateDraftField({ field: "hcpName", value }));
               dispatch(
                 updateDraftField({
                   field: "hcpId",
@@ -48,14 +50,7 @@ function InteractionForm({ hcps, onSubmit, saveStatus }) {
                 })
               );
             }}
-          >
-            <option value="">Search or select HCP...</option>
-            {hcps.map((hcp) => (
-              <option key={hcp.id} value={hcp.name}>
-                {hcp.name} | {hcp.specialty}
-              </option>
-            ))}
-          </select>
+          />
         </Field>
 
         <Field label="Interaction Type">
