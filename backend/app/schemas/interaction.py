@@ -66,3 +66,34 @@ class HcpProfile(BaseModel):
     specialty: str
     territory: str
     preferred_channel: str
+
+
+class SearchHcpProfileRequest(BaseModel):
+    hcp_name: str = Field(alias="hcpName")
+
+    model_config = {
+        "populate_by_name": True
+    }
+
+
+class RecommendationRequest(BaseModel):
+    specialty: str
+    sentiment: str
+    open_questions: str = Field(alias="openQuestions")
+
+    model_config = {
+        "populate_by_name": True
+    }
+
+
+class ComplianceRequest(BaseModel):
+    topics_discussed: str = Field(alias="topicsDiscussed")
+    materials_shared: list[str] = Field(default_factory=list, alias="materialsShared")
+
+    model_config = {
+        "populate_by_name": True
+    }
+
+
+class SummaryRequest(BaseModel):
+    notes: str
